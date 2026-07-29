@@ -22,15 +22,34 @@ if [[ $(id -u) -ne 0 ]]; then
   exit 1
 fi
 
-if ! grep -Eqi 'AlmaLinux|Rocky' /etc/os-release; then
-  echo "This installer is intended for AlmaLinux/Rocky Linux 9." >&2
+if [[ ! -f /etc/os-release ]]; then
+  echo "Could not read /etc/os-release. This installer expects a RHEL-compatible system." >&2
   exit 1
 fi
 
-if ! grep -Eqi 'release 9' /etc/os-release; then
-  echo "This installer expects AlmaLinux/Rocky Linux 9." >&2
-  exit 1
-fi
+# shellcheck disable=SC1091
+source /etc/os-release
+
+os_id="${ID:-}"
+os_like="${ID_LIKE:-}"
+version_id="${VERSION_ID:-}"
+
+case "$os_id:$os_like" in
+  almalinux:*|rocky:*|rhel:*|centos:*) ;;
+  *almalinux*|*rocky*|*rhel*|*centos*) ;;
+  *)
+    echo "This installer is intended for AlmaLinux, Rocky Linux, RHEL, or CentOS 8/9." >&2
+    exit 1
+    ;;
+esac
+
+case "$version_id" in
+  8|8.*|9|9.*) ;;
+  *)
+    echo "This installer expects AlmaLinux/Rocky/RHEL/CentOS 8 or 9." >&2
+    exit 1
+    ;;
+esac
 
 echo "[1/7] Updating system packages"
 dnf update -y
