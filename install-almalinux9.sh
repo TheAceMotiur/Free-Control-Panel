@@ -74,20 +74,24 @@ if ! systemctl is-active --quiet httpd; then
 fi
 
 echo "[3/7] Configuring MariaDB"
+MYSQL_ROOT_AUTH=""
 if mysql -uroot -e "SELECT 1" >/dev/null 2>&1; then
-  mysql -uroot -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_ROOT_PASS}'; FLUSH PRIVILEGES;" >/dev/null 2>&1 || true
+  MYSQL_ROOT_AUTH="-uroot"
+elif mysql -uroot -p"${DB_ROOT_PASS}" -e "SELECT 1" >/dev/null 2>&1; then
+  MYSQL_ROOT_AUTH="-uroot -p${DB_ROOT_PASS}"
 else
   mysqladmin -uroot password "${DB_ROOT_PASS}" >/dev/null 2>&1 || true
+  MYSQL_ROOT_AUTH="-uroot -p${DB_ROOT_PASS}"
 fi
 
-mysql -uroot -p"${DB_ROOT_PASS}" <<MYSQL
+mysql ${MYSQL_ROOT_AUTH} <<MYSQL
 CREATE DATABASE IF NOT EXISTS ${DB_NAME};
 CREATE USER IF NOT EXISTS '${DB_USER}'@'localhost' IDENTIFIED BY '${DB_PASS}';
 GRANT ALL PRIVILEGES ON ${DB_NAME}.* TO '${DB_USER}'@'localhost';
 FLUSH PRIVILEGES;
 MYSQL
 
-mysql -uroot -p"${DB_ROOT_PASS}" "${DB_NAME}" <<MYSQL
+mysql ${MYSQL_ROOT_AUTH} "${DB_NAME}" <<MYSQL
 CREATE TABLE IF NOT EXISTS users (
   id INT AUTO_INCREMENT PRIMARY KEY,
   full_name VARCHAR(120) NOT NULL,
