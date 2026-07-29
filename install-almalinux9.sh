@@ -7,7 +7,7 @@ set -euo pipefail
 # or:
 #   bash install-almalinux9.sh
 
-REPO_URL="${REPO_URL:-https://github.com/your-user/freenetly.git}"
+REPO_URL="${REPO_URL:-https://github.com/TheAceMotiur/Free-Control-Panel.git}"
 APP_DIR="${APP_DIR:-/var/www/freenetly}"
 DOMAIN="${DOMAIN:-localhost}"
 DB_ROOT_PASS="${DB_ROOT_PASS:-$(openssl rand -base64 24)}"
