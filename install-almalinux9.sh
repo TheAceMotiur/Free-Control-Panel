@@ -74,24 +74,46 @@ if ! systemctl is-active --quiet httpd; then
 fi
 
 echo "[3/7] Configuring MariaDB"
+
+# Try to determine working MySQL root authentication
 MYSQL_ROOT_AUTH=""
+MYSQL_ROOT_CMD="mysql"
+
+# Try socket auth first (default on fresh installs)
 if mysql -uroot -e "SELECT 1" >/dev/null 2>&1; then
   MYSQL_ROOT_AUTH="-uroot"
-elif mysql -uroot -p"${DB_ROOT_PASS}" -e "SELECT 1" >/dev/null 2>&1; then
+  MYSQL_ROOT_CMD="mysql"
+# Try with sudo (unix_socket plugin)
+elif sudo mysql -uroot -e "SELECT 1" >/dev/null 2>&1; then
+  MYSQL_ROOT_AUTH="-uroot"
+  MYSQL_ROOT_CMD="sudo mysql"
+# Check if a previous run stored the password
+elif [[ -f /root/.freenetly_mysql_root_pass ]] && mysql -uroot -p"$(cat /root/.freenetly_mysql_root_pass)" -e "SELECT 1" >/dev/null 2>&1; then
+  DB_ROOT_PASS=$(cat /root/.freenetly_mysql_root_pass)
   MYSQL_ROOT_AUTH="-uroot -p${DB_ROOT_PASS}"
+  MYSQL_ROOT_CMD="mysql"
+# Check if user provided MYSQL_ROOT_PASSWORD environment variable
+elif [[ -n "${MYSQL_ROOT_PASSWORD:-}" ]] && mysql -uroot -p"${MYSQL_ROOT_PASSWORD}" -e "SELECT 1" >/dev/null 2>&1; then
+  DB_ROOT_PASS="${MYSQL_ROOT_PASSWORD}"
+  MYSQL_ROOT_AUTH="-uroot -p${DB_ROOT_PASS}"
+  MYSQL_ROOT_CMD="mysql"
+  echo "${DB_ROOT_PASS}" > /root/.freenetly_mysql_root_pass
+  chmod 600 /root/.freenetly_mysql_root_pass
 else
-  mysqladmin -uroot password "${DB_ROOT_PASS}" >/dev/null 2>&1 || true
-  MYSQL_ROOT_AUTH="-uroot -p${DB_ROOT_PASS}"
+  echo "ERROR: Cannot authenticate to MariaDB as root." >&2
+  echo "If MariaDB root has a password, set it with: export MYSQL_ROOT_PASSWORD='your-password'" >&2
+  echo "Then re-run the installer." >&2
+  exit 1
 fi
 
-mysql ${MYSQL_ROOT_AUTH} <<MYSQL
+${MYSQL_ROOT_CMD} ${MYSQL_ROOT_AUTH} <<MYSQL
 CREATE DATABASE IF NOT EXISTS ${DB_NAME};
 CREATE USER IF NOT EXISTS '${DB_USER}'@'localhost' IDENTIFIED BY '${DB_PASS}';
 GRANT ALL PRIVILEGES ON ${DB_NAME}.* TO '${DB_USER}'@'localhost';
 FLUSH PRIVILEGES;
 MYSQL
 
-mysql ${MYSQL_ROOT_AUTH} "${DB_NAME}" <<MYSQL
+${MYSQL_ROOT_CMD} ${MYSQL_ROOT_AUTH} "${DB_NAME}" <<MYSQL
 CREATE TABLE IF NOT EXISTS users (
   id INT AUTO_INCREMENT PRIMARY KEY,
   full_name VARCHAR(120) NOT NULL,
@@ -115,7 +137,7 @@ INSERT INTO services (name, status) SELECT 'phpMyAdmin', 'running' WHERE NOT EXI
 MYSQL
 
 ADMIN_HASH=$(php -r 'echo password_hash($argv[1], PASSWORD_DEFAULT);' "${ADMIN_PASS}")
-mysql -uroot -p"${DB_ROOT_PASS}" "${DB_NAME}" <<MYSQL
+${MYSQL_ROOT_CMD} ${MYSQL_ROOT_AUTH} "${DB_NAME}" <<MYSQL
 INSERT INTO users (full_name, email, password_hash, role)
 VALUES ('System Administrator', '${ADMIN_EMAIL}', '${ADMIN_HASH}', 'admin')
 ON DUPLICATE KEY UPDATE password_hash = VALUES(password_hash), role = VALUES(role);
