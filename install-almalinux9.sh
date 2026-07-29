@@ -3,7 +3,7 @@ set -euo pipefail
 
 # One-click installer for AlmaLinux 9 VPS
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/your-user/your-repo/main/install-almalinux9.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/TheAceMotiur/Free-Control-Panel/refs/heads/main/install-almalinux9.sh | bash
 # or:
 #   bash install-almalinux9.sh
 
