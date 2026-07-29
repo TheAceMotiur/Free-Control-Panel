@@ -1,204 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# One-click installer for AlmaLinux 9 VPS
+# Main installer entrypoint for AlmaLinux 9 VPS
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/TheAceMotiur/Free-Control-Panel/refs/heads/main/install-almalinux9.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/TheAceMotiur/Free-Control-Panel/refs/heads/main/install.sh | bash
 # or:
-#   bash install-almalinux9.sh
-
-REPO_URL="${REPO_URL:-https://github.com/TheAceMotiur/Free-Control-Panel.git}"
-APP_DIR="${APP_DIR:-/var/www/freenetly}"
-DOMAIN="${DOMAIN:-localhost}"
-DB_ROOT_PASS="${DB_ROOT_PASS:-$(openssl rand -base64 24)}"
-DB_NAME="${DB_NAME:-freenetly}"
-DB_USER="${DB_USER:-freenetly}"
-DB_PASS="${DB_PASS:-freenetly}"
-ADMIN_EMAIL="${ADMIN_EMAIL:-TheAceMotiur}"
-ADMIN_PASS="${ADMIN_PASS:-AmiMotiur27@}"
+#   bash install.sh
 
 if [[ $(id -u) -ne 0 ]]; then
   echo "Please run this script as root." >&2
   exit 1
 fi
 
-if [[ ! -f /etc/os-release ]]; then
-  echo "Could not read /etc/os-release. This installer expects a RHEL-compatible system." >&2
+if [[ -f /etc/os-release ]]; then
+  # shellcheck disable=SC1091
+  source /etc/os-release
+fi
+
+if [[ "${ID:-}" == "almalinux" ]] || [[ "${ID_LIKE:-}" == *"almalinux"* ]] || [[ "${ID:-}" == "rocky" ]] || [[ "${ID_LIKE:-}" == *"rocky"* ]]; then
+  curl -fsSL https://raw.githubusercontent.com/TheAceMotiur/Free-Control-Panel/refs/heads/main/install-almalinux9.sh | bash
+else
+  echo "This installer currently supports AlmaLinux or Rocky Linux." >&2
   exit 1
 fi
-
-# shellcheck disable=SC1091
-source /etc/os-release
-
-os_id="${ID:-}"
-os_like="${ID_LIKE:-}"
-version_id="${VERSION_ID:-}"
-
-case "$os_id:$os_like" in
-  almalinux:*|rocky:*|rhel:*|centos:*) ;;
-  *almalinux*|*rocky*|*rhel*|*centos*) ;;
-  *)
-    echo "This installer is intended for AlmaLinux, Rocky Linux, RHEL, or CentOS 8/9." >&2
-    exit 1
-    ;;
-esac
-
-case "$version_id" in
-  8|8.*|9|9.*) ;;
-  *)
-    echo "This installer expects AlmaLinux/Rocky/RHEL/CentOS 8 or 9." >&2
-    exit 1
-    ;;
-esac
-
-echo "[1/7] Updating system packages"
-dnf update -y
-
-echo "[2/7] Installing Apache, PHP, MariaDB, phpMyAdmin and Git"
-dnf install -y epel-release git curl unzip policycoreutils-python-utils
-
-dnf install -y https://rpms.remirepo.net/enterprise/remi-release-9.rpm
-
-dnf module reset php -y || true
-dnf module enable php:remi-8.2 -y || true
-dnf install -y httpd mariadb-server mariadb php php-cli php-mysqlnd php-xml php-gd php-mbstring php-json php-curl php-zip php-fpm php-opcache php-ldap php-pear php-process php-soap php-xmlrpc php-bcmath php-intl php-redis php-imagick phpMyAdmin
-
-systemctl enable --now httpd mariadb
-
-if ! systemctl is-active --quiet mariadb; then
-  systemctl start mariadb
-fi
-
-if ! systemctl is-active --quiet httpd; then
-  systemctl start httpd
-fi
-
-echo "[3/7] Configuring MariaDB"
-if mysql -uroot -e "SELECT 1" >/dev/null 2>&1; then
-  mysql -uroot -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_ROOT_PASS}'; FLUSH PRIVILEGES;" >/dev/null 2>&1 || true
-else
-  mysqladmin -uroot password "${DB_ROOT_PASS}" >/dev/null 2>&1 || true
-fi
-
-mysql -uroot -p"${DB_ROOT_PASS}" <<MYSQL
-CREATE DATABASE IF NOT EXISTS \\`${DB_NAME}\\`;
-CREATE USER IF NOT EXISTS '${DB_USER}'@'localhost' IDENTIFIED BY '${DB_PASS}';
-GRANT ALL PRIVILEGES ON \\`${DB_NAME}\\`.* TO '${DB_USER}'@'localhost';
-FLUSH PRIVILEGES;
-MYSQL
-
-mysql -uroot -p"${DB_ROOT_PASS}" "${DB_NAME}" <<MYSQL
-CREATE TABLE IF NOT EXISTS users (
-  id INT AUTO_INCREMENT PRIMARY KEY,
-  full_name VARCHAR(120) NOT NULL,
-  email VARCHAR(160) NOT NULL UNIQUE,
-  password_hash VARCHAR(255) NOT NULL,
-  role VARCHAR(20) NOT NULL DEFAULT 'user',
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-) ENGINE=InnoDB;
-
-CREATE TABLE IF NOT EXISTS services (
-  id INT AUTO_INCREMENT PRIMARY KEY,
-  name VARCHAR(120) NOT NULL UNIQUE,
-  status VARCHAR(20) NOT NULL DEFAULT 'running',
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-) ENGINE=InnoDB;
-
-INSERT INTO services (name, status) SELECT 'Apache', 'running' WHERE NOT EXISTS (SELECT 1 FROM services WHERE name = 'Apache');
-INSERT INTO services (name, status) SELECT 'PHP', 'running' WHERE NOT EXISTS (SELECT 1 FROM services WHERE name = 'PHP');
-INSERT INTO services (name, status) SELECT 'MySQL', 'running' WHERE NOT EXISTS (SELECT 1 FROM services WHERE name = 'MySQL');
-INSERT INTO services (name, status) SELECT 'phpMyAdmin', 'running' WHERE NOT EXISTS (SELECT 1 FROM services WHERE name = 'phpMyAdmin');
-MYSQL
-
-ADMIN_HASH=$(php -r 'echo password_hash($argv[1], PASSWORD_DEFAULT);' "${ADMIN_PASS}")
-mysql -uroot -p"${DB_ROOT_PASS}" "${DB_NAME}" <<MYSQL
-INSERT INTO users (full_name, email, password_hash, role)
-VALUES ('System Administrator', '${ADMIN_EMAIL}', '${ADMIN_HASH}', 'admin')
-ON DUPLICATE KEY UPDATE password_hash = VALUES(password_hash), role = VALUES(role);
-MYSQL
-
-echo "[4/7] Deploying application"
-mkdir -p /var/www
-if [[ -d "$PWD/.git" ]]; then
-  rm -rf "$APP_DIR"
-  mkdir -p "$APP_DIR"
-  rsync -a --delete "$PWD/" "$APP_DIR/"
-else
-  rm -rf "$APP_DIR"
-  git clone "$REPO_URL" "$APP_DIR"
-fi
-
-mkdir -p "$APP_DIR/includes"
-cat > "$APP_DIR/includes/config.php" <<EOF
-<?php
-// Generated by install-almalinux9.sh
-define('APP_NAME', 'FreeNetly Control Panel');
-define('APP_URL', 'http://${DOMAIN}');
-define('DB_HOST', '127.0.0.1');
-define('DB_NAME', '${DB_NAME}');
-define('DB_USER', '${DB_USER}');
-define('DB_PASS', '${DB_PASS}');
-define('INSTALL_LOCK', '1');
-EOF
-
-chown -R apache:apache "$APP_DIR"
-chmod -R 755 "$APP_DIR"
-
-cat > /etc/httpd/conf.d/freenetly.conf <<EOF
-<VirtualHost *:80>
-    ServerName ${DOMAIN}
-    DocumentRoot ${APP_DIR}
-    <Directory ${APP_DIR}>
-        AllowOverride All
-        Require all granted
-    </Directory>
-</VirtualHost>
-EOF
-
-cat > /etc/httpd/conf.d/phpMyAdmin.conf <<EOF
-Alias /phpmyadmin /usr/share/phpMyAdmin
-<Directory /usr/share/phpMyAdmin/>
-    Require all granted
-</Directory>
-EOF
-
-if command -v semanage >/dev/null 2>&1; then
-  semanage fcontext -a -t httpd_sys_rw_content_t "${APP_DIR}(/.*)?" >/dev/null 2>&1 || true
-  restorecon -Rv "$APP_DIR" >/dev/null 2>&1 || true
-fi
-
-phpenmod mysqli pdo_mysql >/dev/null 2>&1 || true
-systemctl restart httpd php-fpm mariadb >/dev/null 2>&1 || true
-systemctl enable php-fpm >/dev/null 2>&1 || true
-
-cat > /etc/php.d/99-freenetly.ini <<EOF
-upload_max_filesize = 100M
-post_max_size = 100M
-memory_limit = 256M
-max_execution_time = 300
-EOF
-systemctl restart httpd php-fpm >/dev/null 2>&1 || true
-
-echo "[5/7] Creating firewall rules"
-if command -v firewall-cmd >/dev/null 2>&1; then
-  firewall-cmd --permanent --add-service=http >/dev/null 2>&1 || true
-  firewall-cmd --permanent --add-service=https >/dev/null 2>&1 || true
-  firewall-cmd --reload >/dev/null 2>&1 || true
-fi
-
-echo "[6/7] Verifying services"
-for service in httpd mariadb; do
-  systemctl is-active --quiet "$service"
-  echo "- $service: OK"
-done
-
-echo "[7/7] Installation complete"
-echo
-printf 'Web app: http://%s/\n' "$DOMAIN"
-printf 'phpMyAdmin: http://%s/phpmyadmin/\n' "$DOMAIN"
-printf 'Admin login: http://%s/auth/login.php\n' "$DOMAIN"
-printf 'Database root password: %s\n' "$DB_ROOT_PASS"
-printf 'Admin email: %s\n' "$ADMIN_EMAIL"
-printf 'Admin password: %s\n' "$ADMIN_PASS"
-printf 'Database name: %s\n' "$DB_NAME"
-printf 'Database user: %s\n' "$DB_USER"
